@@ -20,11 +20,23 @@ type CompileTask struct {
 	compileDir      string
 	compileFilename string
 	resolveSymlinks bool
+	verbosity       VerbosityLevel
 }
+
+type VerbosityLevel uint
+
+const (
+	VerbosityNone = iota
+	VerbosityDefault
+	VerbosityMore
+	VerbosityAll
+)
 
 // NewCompileTask returns a default (empty) CompileTask
 func NewCompileTask() CompileTask {
-	return CompileTask{}
+	return CompileTask{
+		verbosity: VerbosityDefault,
+	}
 }
 
 func (t *CompileTask) context() *script.Context {
@@ -43,6 +55,11 @@ func (t *CompileTask) ResolveSymlinks() bool {
 // SetResolveSymlinks sets if symlinks will be resolved
 func (t *CompileTask) SetResolveSymlinks(resolveSymlinks bool) {
 	t.resolveSymlinks = resolveSymlinks
+}
+
+// SetVerbosity is used to change the verbosity level
+func (t *CompileTask) SetVerbosity(verbosity VerbosityLevel) {
+	t.verbosity = verbosity
 }
 
 // SourceDir returns the source directory for compilation
@@ -142,13 +159,25 @@ func (t *CompileTask) latextool(toolname, file string, args ...string) error {
 
 	//fmt.Println(sc.CommandPath("lualatex"))
 	sc.MustCommandExist(toolname)
-	err := sc.ExecuteSilent(toolname, args...)
+	var execFunction func(string, ...string) error
+	switch t.verbosity {
+	case VerbosityNone:
+		execFunction = sc.ExecuteFullySilent
+	case VerbosityMore:
+		fallthrough
+	case VerbosityAll:
+		execFunction = sc.ExecuteDebug
+	case VerbosityDefault:
+		fallthrough
+	default:
+		execFunction = sc.ExecuteSilent
+	}
+	err := execFunction(toolname, args...)
 	if err != nil {
-		fmt.Print(sc.LastOutput().String())
-		fmt.Print(sc.LastError().String())
+		fmt.Print(sc.LastOutput())
+		fmt.Print(sc.LastError())
 		os.Exit(1)
 	}
-	// TODO error handling
 	return nil
 }
 
