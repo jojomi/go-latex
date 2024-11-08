@@ -99,10 +99,13 @@ func (t *CompileTask) SetCompileFilename(compileFilename string) {
 // Usually this is the preferable mode of operation because it ensures clean
 // building state.
 func (t *CompileTask) SetCompileDir(CompileDir string) {
+	var err error
 	if CompileDir == "" {
-		CompileDir = t.context().MustGetTempDir()
+		CompileDir, err = t.context().TempDir()
 	}
-	t.compileDir = CompileDir
+	if err == nil {
+		t.compileDir = CompileDir
+	}
 
 	t.context().SetWorkingDir(t.CompileDirInternal())
 }
@@ -159,7 +162,7 @@ func (t *CompileTask) latextool(toolname, file string, args ...string) error {
 
 	//fmt.Println(sc.CommandPath("lualatex"))
 	sc.MustCommandExist(toolname)
-	var execFunction func(string, ...string) error
+	var execFunction func(script.Command) (*script.ProcessResult, error)
 	switch t.verbosity {
 	case VerbosityNone:
 		execFunction = sc.ExecuteFullySilent
@@ -172,10 +175,14 @@ func (t *CompileTask) latextool(toolname, file string, args ...string) error {
 	default:
 		execFunction = sc.ExecuteSilent
 	}
-	err := execFunction(toolname, args...)
+
+	command := &script.LocalCommand{}
+	command.Add(toolname)
+	command.AddAll(args...)
+	result, err := execFunction(command)
 	if err != nil {
-		fmt.Print(sc.LastOutput())
-		fmt.Print(sc.LastError())
+		fmt.Print(result.Output())
+		fmt.Print(result.Error())
 		os.Exit(1)
 	}
 	return nil
@@ -204,14 +211,21 @@ func (t *CompileTask) LillypondBook(latexToolname, file string, args ...string) 
 	binName := "lilypond-book"
 	sc := t.context()
 	file = sc.AbsPath(t.defaultCompileFilename(file))
-	tempDir := t.context().MustGetTempDir()
+	tempDir, err := t.context().TempDir()
+	if err != nil {
+		return err
+	}
 	args = append(args, "--pdf")
 	args = append(args, fmt.Sprintf("--output=%s", tempDir))
 	args = append(args, file)
 	defer os.RemoveAll(tempDir)
 
 	sc.MustCommandExist(binName)
-	err := sc.ExecuteFullySilent(binName, args...)
+
+	command := &script.LocalCommand{}
+	command.Add(binName)
+	command.AddAll(args...)
+	_, err = sc.ExecuteFullySilent(command)
 	if err != nil {
 		return err
 	}
@@ -261,7 +275,10 @@ func (t *CompileTask) Optimize(file string, channel string) error {
 	}
 
 	file = t.defaultCompilePdfFilename(file)
-	tempFile := sc.MustGetTempFile()
+	tempFile, err := sc.TempFile()
+	if err != nil {
+		return err
+	}
 	params := []string{
 		"-sDEVICE=pdfwrite",
 		"-dCompatibilityLevel=1.4",
@@ -271,7 +288,11 @@ func (t *CompileTask) Optimize(file string, channel string) error {
 		file,
 	}
 	sc.SetWorkingDir(t.CompileDirInternal())
-	err := sc.ExecuteSilent("gs", params...)
+
+	command := &script.LocalCommand{}
+	command.Add("gs")
+	command.AddAll(params...)
+	_, err = sc.ExecuteSilent(command)
 	if err != nil {
 		return err
 	}
@@ -330,23 +351,27 @@ func (t *CompileTask) Template(baseFilename string) (*template.Template, string)
 }
 
 // ExecuteTemplate executes a template on the source TeX files.
-func (t *CompileTask) ExecuteTemplate(templ *template.Template, data interface{}, inputFilename string, outputFilename string) {
+func (t *CompileTask) ExecuteTemplate(templ *template.Template, data interface{}, inputFilename string, outputFilename string) error {
 	sc := t.context()
 
 	useTempFile := outputFilename == ""
 	if useTempFile {
-		outputFilename = sc.MustGetTempFile().Name()
+		tempFile, err := sc.TempFile()
+		if err != nil {
+			return err
+		}
+		outputFilename = tempFile.Name()
 	}
 	inputFilename = sc.AbsPath(t.defaultCompileFilename(inputFilename))
 
 	f, err := os.Create(sc.AbsPath(outputFilename))
 	if err != nil {
-		panic(err)
+		return err
 	}
 	w := io.Writer(f)
 	err = templ.ExecuteTemplate(w, filepath.Base(inputFilename), data)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	f.Close()
 
@@ -354,13 +379,14 @@ func (t *CompileTask) ExecuteTemplate(templ *template.Template, data interface{}
 		// copy back, remove temp
 		err = os.Remove(inputFilename)
 		if err != nil {
-			panic(err)
+			return err
 		}
 		err = sc.CopyFile(outputFilename, inputFilename)
 		if err != nil {
-			panic(err)
+			return err
 		}
 	}
+	return nil
 }
 
 // auxiliary
